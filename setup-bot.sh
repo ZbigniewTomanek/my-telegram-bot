@@ -8,6 +8,7 @@ LOG_FILE="$PROJECT_DIR/out/log/service.log"
 
 # Create the logs directory if it doesn't exist
 mkdir -p "$PROJECT_DIR/out/log"
+mkdir -p "$HOME/Library/LaunchAgents"
 
 # Create the LaunchAgent plist file
 cat >"$PLIST_FILE" <<EOF
@@ -25,13 +26,14 @@ cat >"$PLIST_FILE" <<EOF
     <dict>
         <key>PYTHONPATH</key>
         <string>${PROJECT_DIR}</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>-c</string>
-        <string>source "${PROJECT_DIR}/.env" && docker run --rm -v "${PROJECT_DIR}:/app" -w /app --env-file .env -e PYTHONPATH=/app --name telegram_bot ghcr.io/astral-sh/uv:python3.13-alpine uv run --isolated telegram_bot/main.py</string>
+        <string>run-bot.sh</string>
     </array>
 
     <key>StandardOutPath</key>

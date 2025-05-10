@@ -1,6 +1,6 @@
 #!/bin/bash
 
-docker run -it --rm \
+docker run --rm \
   -v "$(pwd):/app" \
   -w /app \
   --rm \

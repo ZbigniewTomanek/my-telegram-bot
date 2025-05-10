@@ -73,7 +73,7 @@ class DosageHandler(PrivateHandler):
         self.db_service.add_drug_log_entry(DrugLogEntry(**context.user_data))
         context.user_data.clear()
         await update.message.reply_text(
-            "✅ *Medication entry successfully logged!* ✅\n\nUse /list\_drugs to view your medication logs.",
+            "✅ *Medication entry successfully logged!* ✅\n\nUse /list_drugs to view your medication logs.",
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END
@@ -84,7 +84,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info("User %s canceled the conversation.", user.first_name)
     await update.message.reply_text(
-        "⚠️ *Medication logging cancelled* ⚠️\n\nNo problem! You can start again anytime with /log\_drug.",
+        "⚠️ *Medication logging cancelled* ⚠️\n\nNo problem! You can start again anytime with /log_drug.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=ReplyKeyboardRemove(),
     )

@@ -17,7 +17,7 @@ class ListFoodHandler(PrivateHandler):
 
         food_logs = self.db_service.list_food_logs(limit)
         if not food_logs:
-            reply.append("_No food entries found. Use /log\\_food to add some!_")
+            reply.append("_No food entries found. Use /log_food to add some!_")
         else:
             for food_log_entry in food_logs:
                 reply.append(

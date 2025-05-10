@@ -102,7 +102,7 @@ class CommentHandler(PrivateHandler):
         self.db_service.add_food_log_entry(FoodLogEntry(**context.user_data))
         context.user_data.clear()
         await update.message.reply_text(
-            "✅ *Food entry successfully logged!* ✅\n\nUse /list\_food to view your food logs.",
+            "✅ *Food entry successfully logged!* ✅\n\nUse /list_food to view your food logs.",
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END
@@ -113,7 +113,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info("User %s canceled the conversation.", user.first_name)
     await update.message.reply_text(
-        "⚠️ *Food logging cancelled* ⚠️\n\nNo problem! You can start again anytime with /log\_food.",
+        "⚠️ *Food logging cancelled* ⚠️\n\nNo problem! You can start again anytime with /log_food.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=ReplyKeyboardRemove(),
     )
