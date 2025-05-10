@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 from loguru import logger
 from telegram import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats, BotCommandScopeDefault
 from telegram.ext import Application, ApplicationBuilder
+
+from telegram_bot.config import BotSettings
 
 # --- project‑specific imports -------------------------------------------------
 from telegram_bot.handlers.commands.garmin_commands import get_garmin_disconnect_command, get_garmin_status_command
@@ -18,16 +18,11 @@ from telegram_bot.handlers.conversations.garmin_export_conversation import get_g
 from telegram_bot.handlers.conversations.log_drug_conversation import get_drug_log_handler
 from telegram_bot.handlers.conversations.log_food_conversation import get_food_log_handler
 from telegram_bot.handlers.messages.default_message_handler import get_default_message_handler
-from telegram_bot.service.db_service import DBService
-from telegram_bot.service.garmin_connect_service import GarminConnectService
-
-# ---------------------------------------------------------------------------
-
-OUT_DIR = Path(__file__).parent.parent / "out"
+from telegram_bot.service_factory import ServiceFactory
 
 
-def setup_logger() -> None:
-    log_dir = OUT_DIR / "log"
+def setup_logger(out_dir: Path) -> None:
+    log_dir = out_dir / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     logger.add(log_dir / "debug.log", rotation="100 MB", retention="7 days", level="DEBUG")
@@ -35,12 +30,7 @@ def setup_logger() -> None:
     logger.info("logger initialised")
 
 
-# ---------------------------------------------------------------------------#
-# Commands                                                                   #
-# ---------------------------------------------------------------------------#
-
-
-def _build_commands() -> Dict[str, List[BotCommand]]:
+def _build_commands() -> dict[str, list[BotCommand]]:
     common = [
         BotCommand("log_food", "Log your food consumption"),
         BotCommand("list_food", "View your food logs"),
@@ -56,35 +46,21 @@ def _build_commands() -> Dict[str, List[BotCommand]]:
         BotCommand("disconnect_garmin", "Disconnect your Garmin account"),
     ]
 
-    german = [
-        BotCommand("log_food", "Lebensmittel protokollieren"),
-        BotCommand("list_food", "Lebensmittelprotokolle anzeigen"),
-        BotCommand("log_drug", "Medikamente protokollieren"),
-        BotCommand("list_drugs", "Medikamentenprotokolle anzeigen"),
-        BotCommand("connect_garmin", "Garmin‑Konto verbinden"),
-        BotCommand("garmin_export", "Daten aus Garmin Connect exportieren"),
-        BotCommand("garmin_status", "Garmin‑Status prüfen"),
-        BotCommand("disconnect_garmin", "Garmin‑Konto trennen"),
-        BotCommand("cancel", "Konversation abbrechen"),
-    ]
-
     return {
         "default": common + garmin,
         "private": common + garmin,
         "group": common,
-        "german": german,
     }
 
 
 async def _post_init(application: Application) -> None:
     commands = _build_commands()
 
-    matrix: List[Tuple[List[BotCommand], object, str | None]] = [
+    matrix: list[tuple[list[BotCommand], object, str | None]] = [
         (commands["private"], BotCommandScopeAllPrivateChats(), None),
         (commands["group"], BotCommandScopeAllGroupChats(), None),
         (commands["default"], BotCommandScopeDefault(), None),
         (commands["default"], BotCommandScopeDefault(), "en"),
-        (commands["german"], BotCommandScopeDefault(), "de"),
     ]
 
     await asyncio.gather(
@@ -93,57 +69,42 @@ async def _post_init(application: Application) -> None:
     logger.info("Bot commands registered.")
 
 
-# ---------------------------------------------------------------------------#
-# Application setup                                                          #
-# ---------------------------------------------------------------------------#
-
-
-def _build_app() -> Application:
-    token = os.getenv("TELEGRAM_BOT_API_KEY")
-    if not token:
-        raise RuntimeError("TELEGRAM_BOT_API_KEY env var not set")
-
+def _build_app(bot_settings: BotSettings) -> Application:
     application = (
         ApplicationBuilder()
-        .token(token)
+        .token(bot_settings.telegram_bot_api_key)
         .concurrent_updates(True)
-        .read_timeout(int(os.getenv("READ_TIMEOUT_S", 30)))
-        .write_timeout(int(os.getenv("WRITE_TIMEOUT_S", 30)))
+        .read_timeout(bot_settings.read_timeout_s)
+        .write_timeout(bot_settings.write_timeout_s)
         .post_init(_post_init)
         .build()
     )
     return application
 
 
-def _initialise_services() -> tuple[DBService, GarminConnectService]:
-    db_service = DBService(out_dir=OUT_DIR)
+def _setup_handlers(app: Application, service_factory: ServiceFactory) -> None:
+    app.add_handler(get_food_log_handler(service_factory.db_service))
+    app.add_handler(get_drug_log_handler(service_factory.db_service))
+    app.add_handler(get_list_food_command(service_factory.db_service))
+    app.add_handler(get_list_drugs_command(service_factory.db_service))
 
-    token_dir = OUT_DIR / "garmin_tokens"
-    token_dir.mkdir(parents=True, exist_ok=True)
-    garmin_service = GarminConnectService(token_store_dir=token_dir)
-
-    return db_service, garmin_service
-
-
-def _setup_handlers(app: Application, db: DBService, garmin: GarminConnectService) -> None:
-    app.add_handler(get_food_log_handler(db))
-    app.add_handler(get_drug_log_handler(db))
-    app.add_handler(get_list_food_command(db))
-    app.add_handler(get_list_drugs_command(db))
-
-    app.add_handler(get_garmin_auth_handler(garmin))
-    app.add_handler(get_garmin_export_handler(garmin))
-    app.add_handler(get_garmin_status_command(garmin))
-    app.add_handler(get_garmin_disconnect_command(garmin))
+    app.add_handler(get_garmin_auth_handler(service_factory.garmin_connect_service))
+    app.add_handler(get_garmin_export_handler(service_factory.garmin_connect_service))
+    app.add_handler(get_garmin_status_command(service_factory.garmin_connect_service))
+    app.add_handler(get_garmin_disconnect_command(service_factory.garmin_connect_service))
 
     app.add_handler(get_default_message_handler())
 
 
 def build_configured_application() -> Application:
-    setup_logger()
-    application = _build_app()
-    db, garmin = _initialise_services()
-    _setup_handlers(application, db, garmin)
+    bot_settings = BotSettings()
+    if not bot_settings.out_dir.exists():
+        bot_settings.out_dir.mkdir(parents=True)
+    setup_logger(bot_settings.out_dir)
+    application = _build_app(bot_settings)
+    service_factory = ServiceFactory(bot_settings)
+
+    _setup_handlers(application, service_factory)
     return application
 
 
