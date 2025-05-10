@@ -2,18 +2,25 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Generic, Optional, TypeVar
 
 from loguru import logger
 
+T = TypeVar("T")
+
 
 @dataclass
-class TaskJob:
-    target_fn: Callable[..., Any]
+class TaskResult(Generic[T]):
+    result: Optional[T] = None
+    exception: Optional[Exception] = None
+
+
+@dataclass
+class TaskJob(Generic[T]):
+    target_fn: Callable[..., T]
     target_args: tuple[Any, ...] = field(default_factory=tuple)
     target_kwargs: dict[str, Any] = field(default_factory=dict)
-
-    callback_fn: Optional[Callable[..., Awaitable[None]]] = None
+    callback_fn: Optional[Callable[[TaskResult], ...]] = None
 
 
 class BackgroundTaskExecutor:
@@ -33,7 +40,7 @@ class BackgroundTaskExecutor:
                              for CPU-bound tasks. This is the primary concurrency limit
                              for the actual heavy computation.
         """
-        self._queue: asyncio.Queue[TaskJob] = asyncio.Queue()
+        self._queue: asyncio.Queue[TaskJob[Any]] = asyncio.Queue()
         self._num_async_workers = num_async_workers
 
         # Ensure num_cpu_workers is at least 1
@@ -42,7 +49,7 @@ class BackgroundTaskExecutor:
             num_cpu_workers = 1
 
         self._process_pool = ProcessPoolExecutor(max_workers=num_cpu_workers)
-        self._worker_tasks: list[asyncio.Task] = []
+        self._worker_tasks: list[asyncio.Task[None]] = []
         self._is_running = False
 
         logger.info(
@@ -50,7 +57,7 @@ class BackgroundTaskExecutor:
             f"and {num_cpu_workers} CPU workers."
         )
 
-    async def _worker(self, worker_id: int):
+    async def _worker(self, worker_id: int) -> None:
         """
         An asyncio worker task that pulls jobs from the queue,
         executes them via the process pool, and then calls the callback.
@@ -61,7 +68,7 @@ class BackgroundTaskExecutor:
         while self._is_running:
             try:
                 # Wait for a job with a timeout to allow checking self._is_running
-                job = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                job: TaskJob[Any] = await asyncio.wait_for(self._queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue  # Check self._is_running again
             except asyncio.CancelledError:
@@ -80,19 +87,24 @@ class BackgroundTaskExecutor:
             try:
                 # Execute the CPU-bound target function in the process pool
                 task_result = await loop.run_in_executor(
-                    self._process_pool, job.target_fn, *job.target_args, **job.target_kwargs
+                    self._process_pool,
+                    job.target_fn,
+                    *job.target_args,
                 )
                 logger.debug(f"Target function {job.target_fn.__name__} completed successfully for worker {worker_id}.")
             except Exception as e:
                 logger.exception(f"Exception in target_fn {job.target_fn.__name__} (worker {worker_id}): {e}")
                 task_exception = e
 
-            # If a callback is provided, execute it
+            result = TaskResult(
+                result=task_result,
+                exception=task_exception,
+            )
             if job.callback_fn:
                 try:
                     logger.debug(f"Executing callback {job.callback_fn.__name__} for worker {worker_id}.")
-                    # The callback receives the result, any exception, and its own pre-configured args
-                    await job.callback_fn(task_result, task_exception, *job.callback_args, **job.callback_kwargs)
+                    # The callback receives the result, any exception
+                    await job.callback_fn(result)
                 except Exception as ce:
                     logger.exception(
                         f"Exception in callback_fn {job.callback_fn.__name__} "
@@ -106,10 +118,10 @@ class BackgroundTaskExecutor:
 
     async def add_task(
         self,
-        target_fn: Callable[..., Any],
+        target_fn: Callable[..., T],
         target_args: tuple[Any, ...] = (),
         target_kwargs: Optional[dict[str, Any]] = None,
-        callback_fn: Optional[Callable[..., Awaitable[None]]] = None,
+        callback_fn: Optional[Callable[[Optional[T], Optional[Exception]], Awaitable[None]]] = None,
     ) -> None:
         """
         Adds a new task to the processing queue.
@@ -119,12 +131,15 @@ class BackgroundTaskExecutor:
             target_args: Positional arguments for target_fn.
             target_kwargs: Keyword arguments for target_fn.
             callback_fn: The async function to call with the result of target_fn.
-                         Signature: async def my_callback(result, exception, *cb_args, **cb_kwargs)
+                         Signature: async def my_callback(
+                             result: Optional[T],
+                             exception: Optional[Exception]
+                         ) -> None
         """
         if not self._is_running:
             raise RuntimeError("BackgroundTaskExecutor is not running. Please start it before adding tasks.")
 
-        job = TaskJob(
+        job: TaskJob[T] = TaskJob(
             target_fn=target_fn,
             target_args=target_args,
             target_kwargs=target_kwargs if target_kwargs is not None else {},
@@ -133,7 +148,7 @@ class BackgroundTaskExecutor:
         await self._queue.put(job)
         logger.info(f"Added task for target {target_fn.__name__} to queue. Queue size: {self._queue.qsize()}")
 
-    async def start_workers(self):
+    async def start_workers(self) -> None:
         """
         Starts the asyncio worker tasks.
         """
@@ -148,7 +163,7 @@ class BackgroundTaskExecutor:
             self._worker_tasks.append(task)
         logger.info(f"Started {self._num_async_workers} async workers for BackgroundTaskExecutor.")
 
-    async def stop_workers(self, wait_for_queue: bool = True):
+    async def stop_workers(self, wait_for_queue: bool = True) -> None:
         """
         Stops the asyncio worker tasks and shuts down the process pool.
 

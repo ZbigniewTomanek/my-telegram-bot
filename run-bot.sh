@@ -6,9 +6,9 @@ docker run --rm \
   -w /app \
   --rm \
   --env-file .env \
-  -v "$(uv cache dir):/uv-cache" \
+  -v "$(pwd)/.cache:/cache" \
   -u "$(id -u):$(id -g)" \
   -e PYTHONPATH=/app \
   --name telegram_bot \
-  ghcr.io/astral-sh/uv:python3.13-alpine \
-  uv run --cache-dir /uv-cache --isolated telegram_bot/main.py
+  ghcr.io/astral-sh/uv:python3.13-bookworm \
+  uv run --cache-dir /cache --isolated telegram_bot/main.py

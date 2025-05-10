@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 from pathlib import Path
 
 from loguru import logger
@@ -8,8 +9,6 @@ from telegram import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAl
 from telegram.ext import Application, ApplicationBuilder
 
 from telegram_bot.config import BotSettings
-
-# --- project‑specific imports -------------------------------------------------
 from telegram_bot.handlers.commands.garmin_commands import get_garmin_disconnect_command, get_garmin_status_command
 from telegram_bot.handlers.commands.list_drug_command import get_list_drugs_command
 from telegram_bot.handlers.commands.list_food_command import get_list_food_command
@@ -17,8 +16,11 @@ from telegram_bot.handlers.conversations.garmin_auth_conversation import get_gar
 from telegram_bot.handlers.conversations.garmin_export_conversation import get_garmin_export_handler
 from telegram_bot.handlers.conversations.log_drug_conversation import get_drug_log_handler
 from telegram_bot.handlers.conversations.log_food_conversation import get_food_log_handler
-from telegram_bot.handlers.messages.default_message_handler import get_default_message_handler
+from telegram_bot.handlers.messages import get_default_message_handler, get_voice_message_handler
 from telegram_bot.service_factory import ServiceFactory
+
+BOT_SETTINGS = BotSettings()
+SERVICE_FACTORY = ServiceFactory(BOT_SETTINGS)
 
 
 def setup_logger(out_dir: Path) -> None:
@@ -56,6 +58,13 @@ def _build_commands() -> dict[str, list[BotCommand]]:
 async def _post_init(application: Application) -> None:
     commands = _build_commands()
 
+    await SERVICE_FACTORY.background_task_executor.start_workers()
+
+    async def stop_workers() -> None:
+        await SERVICE_FACTORY.background_task_executor.stop_workers(False)
+
+    atexit.register(stop_workers)
+
     matrix: list[tuple[list[BotCommand], object, str | None]] = [
         (commands["private"], BotCommandScopeAllPrivateChats(), None),
         (commands["group"], BotCommandScopeAllGroupChats(), None),
@@ -82,29 +91,28 @@ def _build_app(bot_settings: BotSettings) -> Application:
     return application
 
 
-def _setup_handlers(app: Application, service_factory: ServiceFactory) -> None:
-    app.add_handler(get_food_log_handler(service_factory.db_service))
-    app.add_handler(get_drug_log_handler(service_factory.db_service))
-    app.add_handler(get_list_food_command(service_factory.db_service))
-    app.add_handler(get_list_drugs_command(service_factory.db_service))
+def _setup_handlers(app: Application) -> None:
+    app.add_handler(get_food_log_handler(SERVICE_FACTORY.db_service))
+    app.add_handler(get_drug_log_handler(SERVICE_FACTORY.db_service))
+    app.add_handler(get_list_food_command(SERVICE_FACTORY.db_service))
+    app.add_handler(get_list_drugs_command(SERVICE_FACTORY.db_service))
 
-    app.add_handler(get_garmin_auth_handler(service_factory.garmin_connect_service))
-    app.add_handler(get_garmin_export_handler(service_factory.garmin_connect_service))
-    app.add_handler(get_garmin_status_command(service_factory.garmin_connect_service))
-    app.add_handler(get_garmin_disconnect_command(service_factory.garmin_connect_service))
+    app.add_handler(get_garmin_auth_handler(SERVICE_FACTORY.garmin_connect_service))
+    app.add_handler(get_garmin_export_handler(SERVICE_FACTORY.garmin_connect_service))
+    app.add_handler(get_garmin_status_command(SERVICE_FACTORY.garmin_connect_service))
+    app.add_handler(get_garmin_disconnect_command(SERVICE_FACTORY.garmin_connect_service))
 
+    app.add_handler(get_voice_message_handler(SERVICE_FACTORY.message_transcription_service))
     app.add_handler(get_default_message_handler())
 
 
 def build_configured_application() -> Application:
-    bot_settings = BotSettings()
-    if not bot_settings.out_dir.exists():
-        bot_settings.out_dir.mkdir(parents=True)
-    setup_logger(bot_settings.out_dir)
-    application = _build_app(bot_settings)
-    service_factory = ServiceFactory(bot_settings)
+    if not BOT_SETTINGS.out_dir.exists():
+        BOT_SETTINGS.out_dir.mkdir(parents=True)
+    setup_logger(BOT_SETTINGS.out_dir)
+    application = _build_app(BOT_SETTINGS)
 
-    _setup_handlers(application, service_factory)
+    _setup_handlers(application)
     return application
 
 
