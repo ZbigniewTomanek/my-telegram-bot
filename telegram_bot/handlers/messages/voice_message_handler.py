@@ -9,7 +9,7 @@ from telegram.ext import CallbackContext, MessageHandler, filters
 
 from telegram_bot.handlers.base.public_handler import PublicHandler
 from telegram_bot.service.background_task_executor import TaskResult
-from telegram_bot.service.message_transcription_service import MessageTranscriptionService
+from telegram_bot.service.message_transcription_service import MessageTranscriptionService, TranscriptionResult
 
 
 class VoiceMessageHandler(PublicHandler):
@@ -30,7 +30,7 @@ class VoiceMessageHandler(PublicHandler):
                 await update.message.reply_text("❌ An error occurred during transcription.")
                 return
 
-            result = task_result.result
+            result: TranscriptionResult = task_result.result
             transcript = " ".join([segment.text for segment in result.segments])
             transcription_time = round(result.duration.total_seconds(), 2)
             response = "🎙️ *Voice Message Transcript*\n\n"
@@ -38,6 +38,7 @@ class VoiceMessageHandler(PublicHandler):
             response += f"_(Transcribed in {transcription_time}s)_"
 
             await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(result.llm_response.message.content, parse_mode=ParseMode.MARKDOWN)
             temp_path.unlink(missing_ok=True)
 
         await self.message_transcription_service.transcribe_message(

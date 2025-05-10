@@ -4,17 +4,15 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any  # Ensure List is imported
+from typing import Any
 
 from faster_whisper import WhisperModel
-from faster_whisper.transcribe import Segment, TranscriptionInfo  # Make sure these are imported
-from loguru import logger  # Assuming loguru is your logger
+from faster_whisper.transcribe import Segment, TranscriptionInfo
+from loguru import logger
+from ollama import ChatResponse, chat
 
 from telegram_bot.config import WhisperSettings
-from telegram_bot.service.background_task_executor import (  # TaskResult is used by the callback
-    BackgroundTaskExecutor,
-    TaskResult,
-)
+from telegram_bot.service.background_task_executor import BackgroundTaskExecutor, TaskResult
 
 
 @dataclass
@@ -22,6 +20,8 @@ class TranscriptionResult:
     duration: timedelta
     segments: list[Segment]  # Use List from typing for clarity
     info: TranscriptionInfo
+    llm_duration: timedelta
+    llm_response: ChatResponse
 
 
 # 1. Define the transcription logic as a top-level function.
@@ -53,7 +53,7 @@ def _execute_transcription_task(audio_file_path_str: str, whisper_settings_dict:
 
     processed_segments: list[Segment] = []
     for segment in segment_iterator:
-        logger.debug(f"[Worker] Segment: [{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}")
+        logger.debug(f"[Worker] Segment: [{segment.start:.2f}s -> {segment.end:.2f}s]")
         processed_segments.append(segment)
 
     duration = datetime.now() - start_time
@@ -62,7 +62,37 @@ def _execute_transcription_task(audio_file_path_str: str, whisper_settings_dict:
     )
 
     del model
-    return TranscriptionResult(duration=duration, segments=processed_segments, info=info_obj)
+
+    user_message = " ".join([segment.text for segment in processed_segments])
+    llm_start_time = datetime.now()
+    response: ChatResponse = chat(
+        model=whisper_settings.llm_model_name,
+        messages=[
+            {
+                "role": "system",
+                "content": """Jesteś Donaldem Trumpem, który ukończył filozofię na Uniwersytecie Chłopskiego Rozumu. Twoje odpowiedzi łączą elementy:
+
+    1. Stylu mówienia Trumpa: krótkie zdania, powtórzenia, superlatywy ('tremendous', 'huge', 'the best'), przerywniki i dygresje, używanie 'believe me', 'tremendous', 'very very', 'absolutely', częste odwoływanie się do siebie.
+
+    2. Filozofii ludowej/potocznej: upraszczasz złożone koncepcje filozoficzne do 'zdroworozsądkowych' wniosków. Używasz anegdot zamiast akademickich cytatów.
+
+    3. Przekonania o własnej wyjątkowości: Jesteś pewien, że twoje interpretacje są lepsze niż te 'elit akademickich'. Często wspominasz o tym, jak twoje proste a genialne wnioski wywracają 'skomplikowane teorie'.
+
+    4. Stylu mówienia: używasz wielu wykrzykników, podkreślasz swoje tezy wielkimi literami, przerywasz własne myśli nowymi wątkami.
+
+    Odpowiadaj na pytania w pierwszej osobie, używając charakterystycznego stylu - przesadnie pewnego siebie, z częstymi dygresjami i powrotami do głównego tematu. Nigdy nie przyznawaj się do niewiedzy - zamiast tego oferuj 'alternatywne wyjaśnienia' oparte na 'zdrowym rozsądku'. Twoja filozofia to mieszanka pragmatyzmu, indywidualizmu i przekonania o własnej nieomylności.
+    Używaj markdown do formatowania""",
+            },
+            {
+                "role": "user",
+                "content": user_message,
+            },
+        ],
+    )
+    llm_duration = datetime.now() - llm_start_time
+    return TranscriptionResult(
+        duration=duration, segments=processed_segments, info=info_obj, llm_duration=llm_duration, llm_response=response
+    )
 
 
 class MessageTranscriptionService:
@@ -74,9 +104,7 @@ class MessageTranscriptionService:
             f"'{self.whisper_settings.model_size}' will be loaded in worker processes."
         )
 
-    async def transcribe_message(
-        self, tmp_audio_file: Path, callback: Callable[[TaskResult], Awaitable[None]]
-    ) -> None:  # Callback expects TaskResult
+    async def transcribe_message(self, tmp_audio_file: Path, callback: Callable[[TaskResult], Awaitable[None]]) -> None:
         settings_dict = json.loads(self.whisper_settings.model_dump_json())
         logger.debug(f"Adding transcription task to queue for audio file: '{tmp_audio_file}'")
 

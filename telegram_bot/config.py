@@ -11,8 +11,9 @@ class WhisperSettings(BaseSettings):
     compute_type: str = "default"
     cpu_threads: int = 0
     num_workers: int = 1
-    download_root: Path = Path("/cache/whisper")
+    download_root: Path = Path("./.cache/whisper")
     local_files_only: bool = False
+    llm_model_name: str
 
 
 class BotSettings(BaseSettings):
