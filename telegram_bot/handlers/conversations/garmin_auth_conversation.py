@@ -119,7 +119,7 @@ class GarminAuthHandler(PublicHandler):
             await update.message.reply_text(
                 "✅ *Authentication successful!* ✅\n\n"
                 "Your Garmin Connect account is now linked.\n\n"
-                "📈 Use /garmin_export to access your fitness data.",
+                "📈 Use /garmin\\_export to access your fitness data.",
                 parse_mode=ParseMode.MARKDOWN,
             )
             return ConversationHandler.END
@@ -127,7 +127,7 @@ class GarminAuthHandler(PublicHandler):
             await update.message.reply_text(
                 f"❌ *Authentication failed* ❌\n\n"
                 f"_Error: {data}_\n\n"
-                "Please try again with /connect_garmin or contact support if the issue persists.",
+                "Please try again with /connect\\_garmin or contact support if the issue persists.",
                 parse_mode=ParseMode.MARKDOWN,
             )
             return ConversationHandler.END
@@ -149,7 +149,7 @@ class GarminAuthHandler(PublicHandler):
 
         if not login_state:
             await update.message.reply_text(
-                "⏰ *MFA session expired* ⏰\n\nPlease start again with /connect_garmin", parse_mode=ParseMode.MARKDOWN
+                "⏰ *MFA session expired* ⏰\n\nPlease start again with /connect\\_garmin", parse_mode=ParseMode.MARKDOWN
             )
             return ConversationHandler.END
 
@@ -160,12 +160,13 @@ class GarminAuthHandler(PublicHandler):
             await update.message.reply_text(
                 "✅ *Authentication successful!* ✅\n\n"
                 "Your Garmin Connect account is now linked.\n\n"
-                "📈 Use /garmin_export to access your fitness data.",
+                "📈 Use /garmin\\_export to access your fitness data.",
                 parse_mode=ParseMode.MARKDOWN,
             )
         else:
             await update.message.reply_text(
-                "❌ *MFA verification failed* ❌\n\nPlease try again with /connect_garmin", parse_mode=ParseMode.MARKDOWN
+                "❌ *MFA verification failed* ❌\n\nPlease try again with /connect\\_garmin",
+                parse_mode=ParseMode.MARKDOWN,
             )
 
         # Clean up the MFA state
@@ -186,7 +187,7 @@ class GarminAuthHandler(PublicHandler):
             The end of conversation.
         """
         await update.message.reply_text(
-            "⛔ *Authentication cancelled* ⛔\n\nYou can try again anytime with /connect_garmin",
+            "⛔ *Authentication cancelled* ⛔\n\nYou can try again anytime with /connect\\_garmin",
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END

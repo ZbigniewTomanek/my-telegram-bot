@@ -48,12 +48,12 @@ class GarminStatusHandler(PublicHandler):
         if is_connected:
             await update.message.reply_text(
                 "✅ *Your Garmin Connect account is linked* ✅\n\n"
-                "🏃‍♂️ Use /garmin_export to export your health and fitness data 📊",
+                "🏃‍♂️ Use /garmin\\_export to export your health and fitness data 📊",
                 parse_mode=ParseMode.MARKDOWN,
             )
         else:
             await update.message.reply_text(
-                "❌ *No Garmin Connect account is linked* ❌\n\n" "🔗 Use /connect_garmin to link your account 🔗",
+                "❌ *No Garmin Connect account is linked* ❌\n\n" "🔗 Use /connect\\_garmin to link your account 🔗",
                 parse_mode=ParseMode.MARKDOWN,
             )
 
@@ -100,7 +100,7 @@ class GarminDisconnectHandler(PublicHandler):
         await update.message.reply_text(
             "✅ *Your Garmin Connect account has been disconnected* ✅\n\n"
             "🔐 Your tokens have been deleted.\n"
-            "🔄 Use /connect_garmin to link again.",
+            "🔄 Use /connect\\_garmin to link again.",
             parse_mode=ParseMode.MARKDOWN,
         )
 

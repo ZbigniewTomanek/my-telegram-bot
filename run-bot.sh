@@ -1,5 +1,6 @@
 #!/bin/bash
 
+docker rm -f telegram_bot 2>/dev/null || true
 docker run --rm \
   -v "$(pwd):/app" \
   -w /app \

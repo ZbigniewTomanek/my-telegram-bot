@@ -17,7 +17,7 @@ class ListDrugHandler(PrivateHandler):
 
         drug_logs = self.db_service.list_drug_logs(limit)
         if not drug_logs:
-            reply.append("_No medication entries found. Use /log_drug to add some!_")
+            reply.append("_No medication entries found. Use /log\\_drug to add some!_")
         else:
             for log_entry in drug_logs:
                 reply.append(

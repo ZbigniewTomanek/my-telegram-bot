@@ -59,7 +59,7 @@ class GarminExportHandler(PublicHandler):
         # Check if user is authenticated
         if not self.garmin_service.account_manager.is_authenticated(user_id):
             await update.message.reply_text(
-                "You need to connect your Garmin account first. Use /connect_garmin to get started."
+                "You need to connect your Garmin account first. Use /connect\\_garmin to get started."
             )
             return ConversationHandler.END
 
