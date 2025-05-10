@@ -149,7 +149,8 @@ class GarminAuthHandler(PublicHandler):
 
         if not login_state:
             await update.message.reply_text(
-                "⏰ *MFA session expired* ⏰\n\nPlease start again with /connect\\_garmin", parse_mode=ParseMode.MARKDOWN
+                "⏰ *MFA session expired* ⏰\n\nPlease start again with /connect\\_garmin",
+                parse_mode=ParseMode.MARKDOWN,
             )
             return ConversationHandler.END
 

@@ -45,7 +45,8 @@ class DrugHandler(PrivateHandler):
             return DRUG
         context.user_data["drug_name"] = name
         await update.message.reply_text(
-            "📊 *DOSAGE INFORMATION* 📊\n\nWhat is the dosage multiplier? (enter a number)", parse_mode=ParseMode.MARKDOWN
+            "📊 *DOSAGE INFORMATION* 📊\n\nWhat is the dosage multiplier? (enter a number)",
+            parse_mode=ParseMode.MARKDOWN,
         )
         return DOSAGE
 

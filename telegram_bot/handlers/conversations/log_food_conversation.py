@@ -84,7 +84,8 @@ class FatsHandler(PrivateHandler):
 
         context.user_data["fats"] = fats
         await update.message.reply_text(
-            "💬 *Additional Comments* 💬\n\nAny notes about this food? (type 'n' for none)", parse_mode=ParseMode.MARKDOWN
+            "💬 *Additional Comments* 💬\n\nAny notes about this food? (type 'n' for none)",
+            parse_mode=ParseMode.MARKDOWN,
         )
         return COMMENT
 
