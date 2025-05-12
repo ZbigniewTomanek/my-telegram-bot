@@ -3,7 +3,9 @@
 Data models and utility functions for Garmin Connect integration.
 
 This module contains the data classes and helper functions used to retrieve,
-process, and format Garmin Connect health and fitness data.
+process, and format Garmin Connect health and fitness data. It supports fetching
+detailed activity data and all-day heart rate information to provide comprehensive
+health and fitness insights.
 """
 
 import datetime as dt
@@ -18,7 +20,12 @@ from loguru import logger
 
 @dataclass
 class DailyActivity:
-    """Represents a single activity recorded in Garmin Connect."""
+    """
+    Represents a single activity recorded in Garmin Connect.
+
+    This class stores both summary information about an activity and the detailed
+    data from the Garmin Connect API when available.
+    """
 
     activity_type: str
     duration_seconds: float
@@ -29,11 +36,19 @@ class DailyActivity:
     calories: int = 0
     moderate_intensity_minutes: int = 0
     vigorous_intensity_minutes: int = 0
+    activity_id: Optional[int] = None  # Unique identifier for the activity
+    details: Optional[Dict[str, Any]] = None  # Complete detailed response from get_activity_details
 
 
 @dataclass
 class GarminDailyData:
-    """Contains all health and fitness metrics for a single day."""
+    """
+    Contains all health and fitness metrics for a single day.
+
+    This class aggregates various health metrics from Garmin Connect including
+    summary data and detailed activity information. It provides a comprehensive
+    view of daily health and fitness data.
+    """
 
     date: str
     # Steps data
@@ -44,13 +59,13 @@ class GarminDailyData:
     # HRV data
     hrv_last_night_avg: float = 0
     # Calories
-    calories_burned: int = 0
+    calories_burned: int = 0  # Total active calories for the day, preferably from AllDayHR
     # Intensity
-    intensity_minutes: int = 0
+    intensity_minutes: int = 0  # Sum of moderate and vigorous intensity minutes
     # Stress
     avg_stress_level: int = 0
     # Heart rate
-    resting_hr: int = 0
+    resting_hr: int = 0  # Daily resting heart rate, primarily from AllDayHR
     # Body battery
     body_battery_max: int = 0
     body_battery_min: int = 0
@@ -59,7 +74,7 @@ class GarminDailyData:
     # Respiration
     avg_breath_rate: float = 0
     # Activities
-    activities: List[DailyActivity] = field(default_factory=list)
+    activities: List[DailyActivity] = field(default_factory=list)  # Individual activities with detailed data
 
 
 def daterange(start_date: Optional[dt.date] = None, end_date: Optional[dt.date] = None, days: int = 7) -> List[str]:
@@ -99,13 +114,15 @@ def daterange(start_date: Optional[dt.date] = None, end_date: Optional[dt.date] 
 def get_daily_metrics(client: Garmin, date: str) -> Dict[str, Any]:
     """
     Fetch all required metrics for a specific date and package into one dict.
+    Includes detailed activity data and all-day heart rate data.
 
     Args:
         client: The Garmin client.
         date: Date string in YYYY-MM-DD format.
 
     Returns:
-        Dictionary containing all metrics for the specified date.
+        Dictionary containing all metrics for the specified date, including
+        detailed activity data and all-day heart rate data.
     """
     data: Dict[str, Any] = {"date": date}
 
@@ -127,18 +144,222 @@ def get_daily_metrics(client: Garmin, date: str) -> Dict[str, Any]:
             logger.warning(f"Error fetching {key} for {date}: {str(exc)}")
             data[key] = {"error": str(exc)}
 
+    # Fetch activity summaries
     try:
-        data["activities"] = client.get_activities_fordate(date)
+        # Try to get activities using the new API method first
+        try:
+            # Check if there's a new method or direct API call to fetch activities with details
+            # For now, we'll use the existing method
+            raw_activity_summaries = client.get_activities_fordate(date)
+
+            # Process activity summaries normally
+            process_activity_summaries(client, data, date, raw_activity_summaries)
+        except Exception as e:
+            logger.warning(f"Error with primary activity fetch for {date}: {str(e)}")
+            # If that fails, try alternative approaches
+            raw_activity_summaries = fetch_alternative_activity_data(client, date)
+
+            if raw_activity_summaries:
+                process_activity_summaries(client, data, date, raw_activity_summaries)
+            else:
+                # No data available
+                data["ActivitiesForDay"] = {
+                    "errorMessage": f"Failed to retrieve activities data: {str(e)}",
+                    "headers": {},
+                    "payload": [],
+                    "requestUrl": "/activitylist-service/activities/fordailysummary",
+                    "statusCode": 500,
+                    "successful": False,
+                }
     except Exception as exc:
-        logger.warning(f"Error fetching activities for {date}: {str(exc)}")
-        data["activities"] = {"error": str(exc)}
+        logger.error(f"Failed to fetch activities data for {date}: {str(exc)}")
+        data["ActivitiesForDay"] = {
+            "errorMessage": f"Failed to retrieve activities data: {str(exc)}",
+            "headers": {},
+            "payload": [],
+            "requestUrl": "/activitylist-service/activities/fordailysummary",
+            "statusCode": 500,
+            "successful": False,
+        }
+
+    # Fetch all-day heart rate data
+    try:
+        all_day_hr_payload = client.get_heart_rates(date)
+        # Store in the new flat structure
+        data["AllDayHR"] = {
+            "requestUrl": f"/wellness-service/wellness/dailyHeartRate",
+            "statusCode": 200,
+            "headers": {},
+            "errorMessage": None,
+            "payload": all_day_hr_payload,
+            "successful": True,
+        }
+
+        # Also maintain backward compatibility
+        if "activities" in data:
+            data["activities"]["AllDayHR"] = data["AllDayHR"]
+    except Exception as exc:
+        logger.warning(f"Error fetching all-day heart rate for {date}: {str(exc)}")
+        all_day_hr_error = {
+            "requestUrl": f"/wellness-service/wellness/dailyHeartRate",
+            "statusCode": 500,
+            "headers": {},
+            "errorMessage": str(exc),
+            "payload": {},
+            "successful": False,
+        }
+
+        data["AllDayHR"] = all_day_hr_error
+        if "activities" in data:
+            data["activities"]["AllDayHR"] = all_day_hr_error
+
+    # Add sleep data structure if available
+    sleep_times_data = extract_sleep_times_from_data(data)
+    if sleep_times_data:
+        data["SleepTimes"] = sleep_times_data
 
     return data
+
+
+def extract_sleep_times_from_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract sleep times from the sleep data.
+
+    Args:
+        data: The data dictionary containing sleep information.
+
+    Returns:
+        A dictionary with sleep times or empty dict if no data available.
+    """
+    # First, if SleepTimes is already available directly (like in the example data), use it
+    if "SleepTimes" in data and isinstance(data["SleepTimes"], dict):
+        return data["SleepTimes"]
+
+    sleep_times = {}
+    sleep_data = data.get("sleep", {})
+
+    # Try to extract sleep times from sleep data
+    try:
+        daily_sleep_dto = sleep_data.get("dailySleepDTO", {})
+        if daily_sleep_dto:
+            # Current day sleep
+            if "sleepStartTimeGMT" in daily_sleep_dto:
+                sleep_times["currentDaySleepStartTimeGMT"] = int(daily_sleep_dto.get("sleepStartTimeGMT", 0))
+            if "sleepEndTimeGMT" in daily_sleep_dto:
+                sleep_times["currentDaySleepEndTimeGMT"] = int(daily_sleep_dto.get("sleepEndTimeGMT", 0))
+
+        # Try to extract next day's sleep if available (from other sources)
+        next_day_sleep = sleep_data.get("nextDaySleep", {})
+        if next_day_sleep:
+            if "sleepStartTimeGMT" in next_day_sleep:
+                sleep_times["nextDaySleepStartTimeGMT"] = int(next_day_sleep.get("sleepStartTimeGMT", 0))
+            if "sleepEndTimeGMT" in next_day_sleep:
+                sleep_times["nextDaySleepEndTimeGMT"] = int(next_day_sleep.get("sleepEndTimeGMT", 0))
+    except Exception as e:
+        logger.warning(f"Error extracting sleep times: {e}")
+
+    return sleep_times
+
+
+def fetch_alternative_activity_data(client: Garmin, date: str) -> List[Dict[str, Any]]:
+    """
+    Attempt to fetch activity data using alternative API methods.
+
+    Args:
+        client: The Garmin client.
+        date: Date string in YYYY-MM-DD format.
+
+    Returns:
+        List of activity data or empty list if no data available.
+    """
+    try:
+        # Try alternative method if available in the client
+        # This is a placeholder for now
+        return []
+    except Exception:
+        return []
+
+
+def process_activity_summaries(client: Garmin, data: Dict[str, Any], date: str, raw_activity_summaries: Any) -> None:
+    """
+    Process activity summaries and add them to the data dictionary.
+
+    Args:
+        client: The Garmin client.
+        data: The data dictionary to add activity data to.
+        date: Date string in YYYY-MM-DD format.
+        raw_activity_summaries: Raw activity summaries from the Garmin API.
+    """
+    activity_summaries_response_successful = True
+    activity_summaries_error_message = ""
+    detailed_activities_payload = []
+
+    # Handle different possible formats of the raw_activity_summaries
+    if isinstance(raw_activity_summaries, dict) and "ActivitiesForDay" in raw_activity_summaries:
+        # Format from the sample data - extract the payload
+        activities_summary = raw_activity_summaries.get("ActivitiesForDay", {}).get("payload", [])
+    elif isinstance(raw_activity_summaries, list):
+        # Direct list format - use as is
+        activities_summary = raw_activity_summaries
+    else:
+        # Try to extract a list from other possible formats
+        if isinstance(raw_activity_summaries, dict):
+            activities_summary = raw_activity_summaries.get("payload", [])
+        else:
+            # If we can't identify the format, log and use an empty list
+            logger.warning(f"Unrecognized format for activity summaries on {date}: {type(raw_activity_summaries)}")
+            activities_summary = []
+
+    # Process the activity summaries
+    if isinstance(activities_summary, list):
+        for summary in activities_summary:
+            if not isinstance(summary, dict):
+                logger.warning(f"Activity summary is not a dictionary on {date}: {type(summary)}")
+                continue
+
+            activity_id = summary.get("activityId")
+            if activity_id:
+                try:
+                    # Fetch detailed activity data
+                    details = client.get_activity_details(str(activity_id))
+                    detailed_activities_payload.append(details)
+                except (GarminConnectConnectionError, GarminConnectTooManyRequestsError) as exc:
+                    logger.warning(f"Error fetching details for activity {activity_id} on {date}: {str(exc)}")
+                    summary_with_error = summary.copy()
+                    summary_with_error["detailsFetchError"] = str(exc)
+                    detailed_activities_payload.append(summary_with_error)
+            else:
+                logger.warning(f"Activity summary found without ID on {date}")
+                detailed_activities_payload.append(summary)
+    else:
+        activity_summaries_response_successful = False
+        activity_summaries_error_message = (
+            f"Unexpected response format from get_activities_fordate: {type(activities_summary)}"
+        )
+
+    # Structure the activities data in both formats - old nested and new flat
+    activities_data = {
+        "requestUrl": f"/activitylist-service/activities/fordailysummary",
+        "statusCode": 200 if activity_summaries_response_successful else 500,
+        "headers": {},
+        "errorMessage": activity_summaries_error_message,
+        "payload": detailed_activities_payload,
+        "successful": activity_summaries_response_successful,
+    }
+
+    # Add to both formats for backward compatibility
+    data["ActivitiesForDay"] = activities_data
+
+    # Also maintain the old nested structure
+    if "activities" not in data:
+        data["activities"] = {}
+    data["activities"]["ActivitiesForDay"] = activities_data
 
 
 def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
     """
     Extract Garmin Connect data for a specific date into a GarminDailyData object.
+    Processes detailed activity data and all-day heart rate information.
 
     Args:
         client: The Garmin client.
@@ -187,8 +408,12 @@ def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
     daily_data.avg_stress_level = _safe_get(raw_data, ["stress", "avgStressLevel"])
 
     # Extract resting heart rate (RHR)
-    # First try from AllDayHR in activities
+    # First try from AllDayHR in both formats - nested and flat
     rhr_from_all_day_hr = _safe_get(raw_data, ["activities", "AllDayHR", "payload", "restingHeartRate"])
+    # If new format, try with a direct path (from example data)
+    if not rhr_from_all_day_hr:
+        rhr_from_all_day_hr = _safe_get(raw_data, ["AllDayHR", "payload", "restingHeartRate"])
+
     if rhr_from_all_day_hr:
         daily_data.resting_hr = rhr_from_all_day_hr
     else:
@@ -215,39 +440,113 @@ def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
     # Extract respiration data
     daily_data.avg_breath_rate = _safe_get(raw_data, ["respiration", "avgSleepRespirationValue"])
 
-    # Extract activities data - corrected path to the activities payload
-    activities_payload = _safe_get(raw_data, ["activities", "ActivitiesForDay", "payload"], [])
-    daily_total_calories = 0
+    # Get calories from AllDayHR data first if available (preferred source for daily total)
+    all_day_hr_data = _safe_get(raw_data, ["activities", "AllDayHR", "payload"], {})
+    daily_total_calories = all_day_hr_data.get("activeCalories", 0)
+
+    # If no active calories found, try the new format directly
+    if daily_total_calories == 0:
+        all_day_hr_data_new = _safe_get(raw_data, ["AllDayHR", "payload"], {})
+        daily_total_calories = all_day_hr_data_new.get("activeCalories", 0)
+
+    # Try to extract activities from both formats
+    activities_payload_list = _safe_get(raw_data, ["activities", "ActivitiesForDay", "payload"], [])
+
+    # Handle if this is the new direct format provided in the example
+    if (not activities_payload_list or len(activities_payload_list) == 0) and "ActivitiesForDay" in raw_data:
+        # New direct format from the example
+        activities_payload_list = _safe_get(raw_data, ["ActivitiesForDay", "payload"], [])
+        # Also check AllDayHR in the new format for calorie data
+        all_day_hr_data_direct = _safe_get(raw_data, ["AllDayHR", "payload"], {})
+        if not daily_total_calories:
+            daily_total_calories = all_day_hr_data_direct.get("activeCalories", 0)
+
     daily_total_intensity = 0
 
-    if isinstance(activities_payload, list):
-        for act in activities_payload:
-            if isinstance(act, dict):
-                # Extract activity details with correct field names
-                activity = DailyActivity(
-                    activity_type=_safe_get(act, ["activityType", "typeKey"], "Unknown"),
-                    duration_seconds=act.get("duration", 0),
-                    distance_meters=act.get("distance", 0),
-                    avg_hr=act.get("averageHR", 0),  # Field is averageHR in the sample data
-                    min_hr=None,  # minHR not in sample but could be present in other responses
-                    max_hr=None,  # maxHR not in sample but could be present in other responses
-                    calories=act.get("calories", 0),
-                    moderate_intensity_minutes=act.get("moderateIntensityMinutes", 0),
-                    vigorous_intensity_minutes=act.get("vigorousIntensityMinutes", 0),
-                )
+    if isinstance(activities_payload_list, list):
+        for activity_item_data in activities_payload_list:
+            if isinstance(activity_item_data, dict):
+                # Check if this is a detailed activity or a summary with an error
+                if "detailsFetchError" in activity_item_data:
+                    # This is a summary activity where detailed fetch failed
+                    # We still create an activity object with the available summary data
+                    # and store the error message in the details field
+                    summary_data = activity_item_data
+
+                    activity = DailyActivity(
+                        activity_type=_safe_get(summary_data, ["activityType", "typeKey"], "Unknown"),
+                        duration_seconds=summary_data.get("duration", 0),
+                        distance_meters=summary_data.get("distance", 0),
+                        avg_hr=summary_data.get("averageHR", 0),
+                        min_hr=None,
+                        max_hr=None,
+                        calories=summary_data.get("calories", 0),
+                        moderate_intensity_minutes=summary_data.get("moderateIntensityMinutes", 0),
+                        vigorous_intensity_minutes=summary_data.get("vigorousIntensityMinutes", 0),
+                        activity_id=summary_data.get("activityId"),
+                        details={"error": summary_data.get("detailsFetchError"), "summary": summary_data},
+                    )
+                else:
+                    # This is a detailed activity or activity summary
+                    # Extract data with prioritization:
+                    # 1. Try summaryDTO first (which contains summary metrics)
+                    # 2. Fall back to top-level keys in the detailed response
+                    summary_dto = activity_item_data.get("summaryDTO", {})
+
+                    # Get all required fields with proper fallbacks
+                    activity_id = activity_item_data.get("activityId", None)
+
+                    # Try to get activity type - account for different formats
+                    activity_type = None
+                    if _safe_get(summary_dto, ["activityType", "typeKey"], None):
+                        activity_type = _safe_get(summary_dto, ["activityType", "typeKey"], None)
+                    elif _safe_get(activity_item_data, ["activityType", "typeKey"], None):
+                        activity_type = _safe_get(activity_item_data, ["activityType", "typeKey"], None)
+                    else:
+                        # If we can't find typeKey, try to get activityName as fallback
+                        activity_type = activity_item_data.get("activityName", "Unknown")
+
+                    duration_seconds = summary_dto.get("duration", None) or activity_item_data.get("duration", 0)
+                    distance_meters = summary_dto.get("distance", None) or activity_item_data.get("distance", 0)
+                    avg_hr = summary_dto.get("averageHR", None) or activity_item_data.get("averageHR", 0)
+                    min_hr = summary_dto.get("minHR", None) or activity_item_data.get("minHeartRate", None)
+                    max_hr = summary_dto.get("maxHR", None) or activity_item_data.get("maxHeartRate", None)
+                    calories = summary_dto.get("calories", None) or activity_item_data.get("calories", 0)
+
+                    # Get intensity minutes with proper fallbacks
+                    moderate_intensity_minutes = summary_dto.get(
+                        "moderateIntensityMinutes", None
+                    ) or activity_item_data.get("moderateIntensityMinutes", 0)
+                    vigorous_intensity_minutes = summary_dto.get(
+                        "vigorousIntensityMinutes", None
+                    ) or activity_item_data.get("vigorousIntensityMinutes", 0)
+
+                    # Create the activity object with detailed information
+                    activity = DailyActivity(
+                        activity_type=activity_type,
+                        duration_seconds=duration_seconds,
+                        distance_meters=distance_meters,
+                        avg_hr=avg_hr,
+                        min_hr=min_hr,
+                        max_hr=max_hr,
+                        calories=calories,
+                        moderate_intensity_minutes=moderate_intensity_minutes,
+                        vigorous_intensity_minutes=vigorous_intensity_minutes,
+                        activity_id=activity_id,
+                        details=activity_item_data,  # Store the full detailed response
+                    )
+
+                # Add to daily data and update totals
                 daily_data.activities.append(activity)
 
-                # Update totals
-                daily_total_calories += activity.calories
+                # Only add to daily totals if we don't have the all-day data
+                # This ensures we prefer the all-day total when available
+                if daily_total_calories == 0:
+                    daily_total_calories += activity.calories
+
                 daily_total_intensity += activity.moderate_intensity_minutes + activity.vigorous_intensity_minutes
 
-    # If we didn't get any calories from activities, try to get from other sources
-    if daily_total_calories == 0:
-        # Try to get calories from AllDayHR data
-        all_day_data = _safe_get(raw_data, ["activities", "AllDayHR", "payload"], {})
-        if "activeCalories" in all_day_data:
-            daily_total_calories = all_day_data["activeCalories"]
-
+    # Set the daily totals
     daily_data.calories_burned = daily_total_calories
     daily_data.intensity_minutes = daily_total_intensity
 

@@ -1,0 +1,5 @@
+{
+  "error": "'Garmin' object has no attribute 'get_sleep_data_points'",
+  "start_date": "2025-05-01",
+  "end_date": "2025-05-01"
+}

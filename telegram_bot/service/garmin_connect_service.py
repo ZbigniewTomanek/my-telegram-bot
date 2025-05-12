@@ -15,6 +15,7 @@ BACKOFF = 5  # seconds (multiplier for retry)
 
 # Data classes imported from original script
 from telegram_bot.service.garmin_data_models import (
+    DailyActivity,
     GarminDailyData,
     _safe_mean,
     _safe_sum,
@@ -113,6 +114,7 @@ class GarminConnectService:
     ) -> List[GarminDailyData]:
         """
         Retrieve Garmin data for the specified period.
+        Includes detailed activity data and all-day heart rate information.
 
         Args:
             telegram_user_id: The Telegram user ID.
@@ -145,8 +147,46 @@ class GarminConnectService:
                     sleep_seconds = BACKOFF * (attempt + 1)
                     logger.warning(f"Rate limit hit – retrying {date} in {sleep_seconds}s…")
                     await asyncio.sleep(sleep_seconds)
+                except Exception as exc:
+                    if attempt < RETRIES - 1:
+                        sleep_seconds = BACKOFF * (attempt + 1)
+                        logger.warning(f"Error processing data for {date}: {str(exc)}. Retrying in {sleep_seconds}s...")
+                        await asyncio.sleep(sleep_seconds)
+                    else:
+                        logger.error(f"Failed to process data for {date} after {RETRIES} attempts: {str(exc)}")
+                        # Create a minimal GarminDailyData object with error info
+                        error_data = GarminDailyData(
+                            date=date,
+                            # Add a DailyActivity with the error message
+                            activities=[
+                                DailyActivity(
+                                    activity_type="Error",
+                                    duration_seconds=0,
+                                    distance_meters=0,
+                                    avg_hr=0,
+                                    details={"error": f"Failed to fetch data: {str(exc)}"},
+                                )
+                            ],
+                        )
+                        all_data.append(error_data)
+                        break
             else:
-                logger.warning(f"Skipping {date} after {RETRIES} attempts")
+                logger.warning(f"Skipping {date} after {RETRIES} attempts due to rate limiting")
+                # Create a minimal GarminDailyData object with rate limiting error info
+                rate_limit_data = GarminDailyData(
+                    date=date,
+                    # Add a DailyActivity with the error message
+                    activities=[
+                        DailyActivity(
+                            activity_type="Error",
+                            duration_seconds=0,
+                            distance_meters=0,
+                            avg_hr=0,
+                            details={"error": f"Rate limit exceeded after {RETRIES} attempts"},
+                        )
+                    ],
+                )
+                all_data.append(rate_limit_data)
 
         logger.info(f"Retrieved data for {len(all_data)} days for user {telegram_user_id}")
         return all_data
@@ -185,6 +225,7 @@ class GarminConnectService:
     ) -> List[Dict[str, Any]]:
         """
         Export raw JSON data from Garmin Connect API.
+        Includes detailed activity data and all-day heart rate information.
 
         Args:
             telegram_user_id: The Telegram user ID.
@@ -215,8 +256,21 @@ class GarminConnectService:
                     sleep_seconds = BACKOFF * (attempt + 1)
                     logger.warning(f"Rate limit hit – retrying {date} in {sleep_seconds}s…")
                     await asyncio.sleep(sleep_seconds)
+                except Exception as exc:
+                    if attempt < RETRIES - 1:
+                        sleep_seconds = BACKOFF * (attempt + 1)
+                        logger.warning(f"Error fetching data for {date}: {str(exc)}. Retrying in {sleep_seconds}s...")
+                        await asyncio.sleep(sleep_seconds)
+                    else:
+                        logger.error(f"Failed to fetch data for {date} after {RETRIES} attempts: {str(exc)}")
+                        # Add error info to raw_data instead of skipping completely
+                        raw_data.append(
+                            {"date": date, "error": f"Failed to fetch data after {RETRIES} attempts: {str(exc)}"}
+                        )
+                        break
             else:
-                logger.warning(f"Skipping {date} after {RETRIES} attempts")
+                logger.warning(f"Skipping {date} after {RETRIES} attempts due to rate limiting")
+                raw_data.append({"date": date, "error": f"Rate limit exceeded after {RETRIES} attempts"})
 
         logger.info(f"Exported raw JSON data for {len(raw_data)} days")
         return raw_data

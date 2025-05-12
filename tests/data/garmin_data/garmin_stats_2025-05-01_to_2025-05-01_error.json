@@ -1,0 +1,5 @@
+{
+  "error": "Garmin.get_stats() takes 2 positional arguments but 3 were given",
+  "start_date": "2025-05-01",
+  "end_date": "2025-05-01"
+}

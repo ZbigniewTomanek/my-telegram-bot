@@ -1,0 +1,16 @@
+{
+  "userProfileId": 121573651,
+  "statisticsStartDate": "2025-05-01",
+  "statisticsEndDate": "2025-05-01",
+  "allMetrics": {
+    "metricsMap": {
+      "WELLNESS_RESTING_HEART_RATE": [
+        {
+          "value": 50.0,
+          "calendarDate": "2025-05-01"
+        }
+      ]
+    }
+  },
+  "groupedMetrics": null
+}
