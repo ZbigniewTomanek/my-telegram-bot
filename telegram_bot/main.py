@@ -63,7 +63,15 @@ async def _post_init(application: Application) -> None:
     async def stop_workers() -> None:
         await SERVICE_FACTORY.background_task_executor.stop_workers(False)
 
-    atexit.register(stop_workers)
+    def shutdown_workers():
+        """Synchronous wrapper for async shutdown."""
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(stop_workers())
+        else:
+            asyncio.run(stop_workers())
+
+    atexit.register(shutdown_workers)
 
     matrix: list[tuple[list[BotCommand], object, str | None]] = [
         (commands["private"], BotCommandScopeAllPrivateChats(), None),
@@ -102,8 +110,13 @@ def _setup_handlers(app: Application) -> None:
     app.add_handler(get_garmin_status_command(SERVICE_FACTORY.garmin_connect_service))
     app.add_handler(get_garmin_disconnect_command(SERVICE_FACTORY.garmin_connect_service))
 
-    app.add_handler(get_voice_message_handler(SERVICE_FACTORY.message_transcription_service))
-    app.add_handler(get_default_message_handler())
+    app.add_handler(
+        get_voice_message_handler(
+            message_transcription_service=SERVICE_FACTORY.message_transcription_service,
+            ai_assistant_service=SERVICE_FACTORY.ai_assistant_service,
+        )
+    )
+    app.add_handler(get_default_message_handler(SERVICE_FACTORY.ai_assistant_service))
 
 
 def build_configured_application() -> Application:

@@ -3,6 +3,8 @@ from typing import Union
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from telegram_bot.ai_assistant.ai_assitant_agent import AIAssistantConfig
+
 
 class WhisperSettings(BaseSettings):
     model_size: str
@@ -28,3 +30,4 @@ class BotSettings(BaseSettings):
     executor_num_async_workers: int = 4
     executor_num_cpu_workers: int = 2
     whisper: WhisperSettings
+    ai_assistant: AIAssistantConfig

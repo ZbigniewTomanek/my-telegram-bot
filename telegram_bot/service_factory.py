@@ -1,6 +1,7 @@
 from functools import cached_property
 
 from telegram_bot.config import BotSettings
+from telegram_bot.service.ai_assitant_service import AIAssistantService
 from telegram_bot.service.background_task_executor import BackgroundTaskExecutor
 from telegram_bot.service.db_service import DBService
 from telegram_bot.service.garmin_connect_service import GarminConnectService
@@ -33,3 +34,7 @@ class ServiceFactory:
         return MessageTranscriptionService(
             background_task_executor=self.background_task_executor, whisper_settings=self.bot_settings.whisper
         )
+
+    @cached_property
+    def ai_assistant_service(self) -> AIAssistantService:
+        return AIAssistantService(db_service=self.db_service, bot_settings=self.bot_settings)
