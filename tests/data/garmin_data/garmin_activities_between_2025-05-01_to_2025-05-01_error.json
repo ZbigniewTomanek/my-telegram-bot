@@ -1,5 +1,3 @@
-{
-  "error": "'Garmin' object has no attribute 'get_activities_between'",
-  "start_date": "2025-05-01",
-  "end_date": "2025-05-01"
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:0491edc22b7f624f76ae33347f70bc79142bba25d7f88d1497d8768f872e5a6f
+size 133

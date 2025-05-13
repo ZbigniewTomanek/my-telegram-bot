@@ -38,6 +38,33 @@ class DailyActivity:
     vigorous_intensity_minutes: int = 0
     activity_id: Optional[int] = None  # Unique identifier for the activity
     details: Optional[Dict[str, Any]] = None  # Complete detailed response from get_activity_details
+    split_summaries: Optional[Dict[str, Any]] = None  # Split data for the activity
+
+
+@dataclass
+class GarminDevice:
+    """
+    Represents a Garmin device registered to the user.
+    """
+
+    device_id: str
+    device_name: str
+    device_type: str
+    mac_address: Optional[str] = None
+    last_used: Optional[str] = None
+    solar_data: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class PersonalRecord:
+    """
+    Represents a personal record achieved by the user.
+    """
+
+    record_type: str
+    value: float
+    date: str
+    activity_id: Optional[int] = None
 
 
 @dataclass
@@ -53,6 +80,7 @@ class GarminDailyData:
     date: str
     # Steps data
     steps: int = 0
+    floors_climbed: int = 0  # New field for floors data
     # Sleep data
     sleep_duration_hours: float = 0
     sleep_score: int = 0
@@ -62,6 +90,7 @@ class GarminDailyData:
     calories_burned: int = 0  # Total active calories for the day, preferably from AllDayHR
     # Intensity
     intensity_minutes: int = 0  # Sum of moderate and vigorous intensity minutes
+    intensity_minutes_data: Optional[Dict[str, Any]] = None  # Detailed intensity minutes data
     # Stress
     avg_stress_level: int = 0
     # Heart rate
@@ -73,8 +102,19 @@ class GarminDailyData:
     avg_spo2: float = 0
     # Respiration
     avg_breath_rate: float = 0
+    # Hydration
+    hydration_amount_ml: float = 0  # New field for hydration data
+    hydration_goal_ml: float = 0  # New field for hydration goal
+    # Fitness age
+    fitness_age: Optional[int] = None  # New field for fitness age
+    fitness_age_data: Optional[Dict[str, Any]] = None  # Additional fitness age insights
+    # Devices
+    devices: List[GarminDevice] = field(default_factory=list)  # User's Garmin devices
+    # Personal records
+    personal_records: List[PersonalRecord] = field(default_factory=list)  # User's personal records
     # Activities
     activities: List[DailyActivity] = field(default_factory=list)  # Individual activities with detailed data
+    activities_detailed: Optional[Dict[str, Any]] = None  # Comprehensive activities data
 
 
 def daterange(start_date: Optional[dt.date] = None, end_date: Optional[dt.date] = None, days: int = 7) -> List[str]:
@@ -187,7 +227,7 @@ def get_daily_metrics(client: Garmin, date: str) -> Dict[str, Any]:
         all_day_hr_payload = client.get_heart_rates(date)
         # Store in the new flat structure
         data["AllDayHR"] = {
-            "requestUrl": f"/wellness-service/wellness/dailyHeartRate",
+            "requestUrl": "/wellness-service/wellness/dailyHeartRate",
             "statusCode": 200,
             "headers": {},
             "errorMessage": None,
@@ -201,7 +241,7 @@ def get_daily_metrics(client: Garmin, date: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning(f"Error fetching all-day heart rate for {date}: {str(exc)}")
         all_day_hr_error = {
-            "requestUrl": f"/wellness-service/wellness/dailyHeartRate",
+            "requestUrl": "/wellness-service/wellness/dailyHeartRate",
             "statusCode": 500,
             "headers": {},
             "errorMessage": str(exc),
@@ -339,7 +379,7 @@ def process_activity_summaries(client: Garmin, data: Dict[str, Any], date: str, 
 
     # Structure the activities data in both formats - old nested and new flat
     activities_data = {
-        "requestUrl": f"/activitylist-service/activities/fordailysummary",
+        "requestUrl": "/activitylist-service/activities/fordailysummary",
         "statusCode": 200 if activity_summaries_response_successful else 500,
         "headers": {},
         "errorMessage": activity_summaries_error_message,
@@ -395,6 +435,81 @@ def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
         else 0
     )
 
+    # Extract floors data if available
+    try:
+        floors_data = client.get_floors(date)
+        if isinstance(floors_data, list):
+            daily_data.floors_climbed = sum(floor.get("value", 0) for floor in floors_data)
+        elif isinstance(floors_data, dict):
+            daily_data.floors_climbed = _safe_get(floors_data, ["floorsAscended"], 0)
+    except Exception:
+        daily_data.floors_climbed = 0
+
+    # Extract hydration data if available
+    try:
+        hydration_data = client.get_hydration_data(date)
+        if isinstance(hydration_data, dict):
+            daily_data.hydration_amount_ml = _safe_get(hydration_data, ["valueInML"], 0)
+            daily_data.hydration_goal_ml = _safe_get(hydration_data, ["goalInML"], 0)
+    except Exception:
+        daily_data.hydration_amount_ml = 0
+        daily_data.hydration_goal_ml = 0
+
+    # Extract fitness age data if available
+    try:
+        fitness_age_data = client.get_fitnessage_data()
+        if isinstance(fitness_age_data, dict):
+            daily_data.fitness_age = _safe_get(fitness_age_data, ["fitnessAge"], None)
+            daily_data.fitness_age_data = fitness_age_data
+    except Exception:
+        daily_data.fitness_age = None
+        daily_data.fitness_age_data = None
+
+    # Try to get device information
+    try:
+        devices_data = client.get_devices()
+        if devices_data and isinstance(devices_data, list):
+            for device in devices_data:
+                if isinstance(device, dict) and device.get("deviceId"):
+                    device_id = device.get("deviceId")
+                    device_obj = GarminDevice(
+                        device_id=str(device_id),
+                        device_name=device.get("productDisplayName", "Unknown Device"),
+                        device_type=device.get("deviceType", "Unknown Type"),
+                        mac_address=device.get("macAddress"),
+                        last_used=device.get("lastUsedDate"),
+                    )
+
+                    # Try to get solar data if available
+                    try:
+                        solar_data = client.get_device_solar_data(device_id)
+                        if solar_data:
+                            device_obj.solar_data = solar_data
+                    except Exception:
+                        pass  # Solar data not available for this device
+
+                    daily_data.devices.append(device_obj)
+    except Exception:
+        pass  # Device information not available
+
+    # Try to get personal records
+    try:
+        personal_records_data = client.get_personal_record()
+        if personal_records_data and isinstance(personal_records_data, dict):
+            for record_type, records in personal_records_data.items():
+                if isinstance(records, list):
+                    for record in records:
+                        if isinstance(record, dict):
+                            personal_record = PersonalRecord(
+                                record_type=record_type,
+                                value=record.get("value", 0),
+                                date=record.get("date", ""),
+                                activity_id=record.get("activityId"),
+                            )
+                            daily_data.personal_records.append(personal_record)
+    except Exception:
+        pass  # Personal records not available
+
     # Extract sleep data
     sleep_data = raw_data.get("sleep", {})
     sleep_dur_seconds = _safe_get(sleep_data, ["dailySleepDTO", "sleepTimeSeconds"])
@@ -449,6 +564,14 @@ def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
         all_day_hr_data_new = _safe_get(raw_data, ["AllDayHR", "payload"], {})
         daily_total_calories = all_day_hr_data_new.get("activeCalories", 0)
 
+    # Try to get intensity minutes data
+    try:
+        intensity_minutes_data = client.get_intensity_minutes_data(date)
+        if intensity_minutes_data:
+            daily_data.intensity_minutes_data = intensity_minutes_data
+    except Exception:
+        daily_data.intensity_minutes_data = None
+
     # Try to extract activities from both formats
     activities_payload_list = _safe_get(raw_data, ["activities", "ActivitiesForDay", "payload"], [])
 
@@ -460,6 +583,23 @@ def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
         all_day_hr_data_direct = _safe_get(raw_data, ["AllDayHR", "payload"], {})
         if not daily_total_calories:
             daily_total_calories = all_day_hr_data_direct.get("activeCalories", 0)
+
+    # Try to get detailed activities
+    try:
+        activities_detailed = client.get_activities_by_date(date, date)
+        if activities_detailed and isinstance(activities_detailed, list):
+            # Process activities_detailed to add split summaries
+            for activity in activities_detailed:
+                activity_id = activity.get("activityId")
+                if activity_id:
+                    try:
+                        splits = client.get_activity_split_summaries(activity_id)
+                        activity["split_summaries"] = splits
+                    except Exception:
+                        pass  # Split data not available
+            daily_data.activities_detailed = activities_detailed
+    except Exception:
+        daily_data.activities_detailed = None
 
     daily_total_intensity = 0
 
@@ -521,6 +661,23 @@ def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
                         "vigorousIntensityMinutes", None
                     ) or activity_item_data.get("vigorousIntensityMinutes", 0)
 
+                    # Try to get split summaries if available
+                    split_summaries = None
+                    if activity_id:
+                        try:
+                            # Try to get from the pre-processed detailed activities
+                            if daily_data.activities_detailed:
+                                for detailed_activity in daily_data.activities_detailed:
+                                    if str(detailed_activity.get("activityId")) == str(activity_id):
+                                        split_summaries = detailed_activity.get("split_summaries")
+                                        break
+
+                            # If not found, try to fetch directly
+                            if not split_summaries:
+                                split_summaries = client.get_activity_split_summaries(activity_id)
+                        except Exception:
+                            pass  # Split data not available
+
                     # Create the activity object with detailed information
                     activity = DailyActivity(
                         activity_type=activity_type,
@@ -534,6 +691,7 @@ def extract_daily_data(client: Garmin, date: str) -> GarminDailyData:
                         vigorous_intensity_minutes=vigorous_intensity_minutes,
                         activity_id=activity_id,
                         details=activity_item_data,  # Store the full detailed response
+                        split_summaries=split_summaries,  # Store split data if available
                     )
 
                 # Add to daily data and update totals
@@ -619,6 +777,7 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
 
     # Extract data for weekly aggregates
     steps_vals = [d.steps for d in week_data]
+    floors_vals = [d.floors_climbed for d in week_data]
     sleep_dur_vals = [d.sleep_duration_hours for d in week_data]
     sleep_score_vals = [d.sleep_score for d in week_data]
     hrv_vals = [d.hrv_last_night_avg for d in week_data]
@@ -630,6 +789,7 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
     bb_min_vals = [d.body_battery_min for d in week_data]
     spo2_vals = [d.avg_spo2 for d in week_data]
     breath_vals = [d.avg_breath_rate for d in week_data]
+    hydration_vals = [d.hydration_amount_ml for d in week_data]
 
     md: List[str] = [f"# Garmin Health & Fitness Report: {start} – {end}\n"]
 
@@ -639,6 +799,7 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
         "| Metric                     | Daily Average    | Total            | Trend        |",
         "|----------------------------|------------------|------------------|--------------|",
         f"| Steps                      | {_safe_mean(steps_vals):,.0f}       | {_safe_sum(steps_vals):,.0f}       | {_trend(steps_vals)}     |",
+        f"| Floors Climbed             | {_safe_mean(floors_vals):,.1f}       | {_safe_sum(floors_vals):,.0f}       | {_trend(floors_vals)}     |",
         f"| Sleep Duration             | {_safe_mean(sleep_dur_vals):.1f} h      | {_safe_sum(sleep_dur_vals):.1f} h      | {_trend(sleep_dur_vals)} |",
         f"| Sleep Score                | {_safe_mean(sleep_score_vals):.0f}         | –                | {_trend(sleep_score_vals)} |",
         f"| HRV (Last Night Avg)       | {_safe_mean(hrv_vals):.0f} ms        | –                | {_trend(hrv_vals)}     |",
@@ -649,6 +810,7 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
         f"| Body Battery (Sleep Range) | {_safe_mean(bb_max_vals):.0f}–{_safe_mean(bb_min_vals):.0f} | –                | {_trend(bb_max_vals)}     |",
         f"| Avg Blood Oxygen (Sleep)   | {_safe_mean(spo2_vals):.1f}%       | –                | {_trend(spo2_vals)}    |",
         f"| Avg Breath Rate (Sleep)    | {_safe_mean(breath_vals):.1f} br/min   | –                | {_trend(breath_vals)}    |",
+        f"| Hydration                  | {_safe_mean(hydration_vals):.0f} ml      | {_safe_sum(hydration_vals):.0f} ml      | {_trend(hydration_vals)}    |",
         "",
     ]
 
@@ -671,6 +833,7 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
     # Add rows for each metric
     metric_data = [
         ("Steps", [f"{d.steps:,.0f}" for d in week_data]),
+        ("Floors", [f"{d.floors_climbed:,.0f}" for d in week_data]),
         ("Sleep (h)", [f"{d.sleep_duration_hours:.1f}" for d in week_data]),
         ("Sleep Score", [f"{d.sleep_score:.0f}" for d in week_data]),
         ("HRV (ms)", [f"{d.hrv_last_night_avg:.0f}" for d in week_data]),
@@ -682,6 +845,7 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
         ("Body Battery Min", [f"{d.body_battery_min:.0f}" for d in week_data]),
         ("SpO2 (%)", [f"{d.avg_spo2:.1f}" for d in week_data]),
         ("Breath Rate", [f"{d.avg_breath_rate:.1f}" for d in week_data]),
+        ("Hydration (ml)", [f"{d.hydration_amount_ml:.0f}" for d in week_data]),
     ]
 
     for metric_name, values in metric_data:
@@ -706,9 +870,18 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
         md += [
             "#### Wellness Metrics",
             f"- **Steps**: {day_data.steps:,.0f}",
+            f"- **Floors Climbed**: {day_data.floors_climbed:,.0f}",
             f"- **Resting Heart Rate**: {day_data.resting_hr:.0f} bpm",
             f"- **Stress Level (Avg)**: {day_data.avg_stress_level:.0f}",
             f"- **Body Battery**: Max {day_data.body_battery_max:.0f}, Min {day_data.body_battery_min:.0f}",
+            f"- **Hydration**: {day_data.hydration_amount_ml:.0f} ml / {day_data.hydration_goal_ml:.0f} ml goal",
+        ]
+
+        # Add fitness age if available
+        if day_data.fitness_age:
+            md.append(f"- **Fitness Age**: {day_data.fitness_age} years")
+
+        md += [
             "",
             "#### Sleep Metrics",
             f"- **Duration**: {day_data.sleep_duration_hours:.1f} hours",
@@ -723,30 +896,63 @@ def format_markdown(week_data: List[GarminDailyData]) -> str:
             "",
         ]
 
+        # Display devices if available
+        if day_data.devices:
+            md.append("#### Garmin Devices")
+            for device in day_data.devices:
+                md.append(f"- **{device.device_name}** ({device.device_type})")
+                if device.last_used:
+                    md.append(f"  - Last Used: {device.last_used}")
+                if device.solar_data:
+                    solar_intensity = device.solar_data.get("solarIntensity", 0)
+                    md.append(f"  - Solar Intensity: {solar_intensity}%")
+            md.append("")
+
+        # Display personal records if available
+        if day_data.personal_records:
+            md.append("#### Personal Records")
+            for record in day_data.personal_records:
+                md.append(f"- **{record.record_type}**: {record.value} ({record.date})")
+            md.append("")
+
         # Activities section
         if day_data.activities:
             md.append("#### Recorded Activities")
             for activity in day_data.activities:
                 duration_fmt = str(dt.timedelta(seconds=round(activity.duration_seconds)))
                 distance_km = activity.distance_meters / 1000
-                md.append(
-                    f"- **{activity.activity_type}**\n"
-                    f"  - Duration: {duration_fmt}\n"
-                    f"  - Distance: {distance_km:.2f} km\n"
-                    f"  - Avg HR: {activity.avg_hr:.0f} bpm\n"
-                    f"  - Calories: {activity.calories:,.0f}"
-                )
+
+                activity_info = [
+                    f"- **{activity.activity_type}**\n",
+                    f"  - Duration: {duration_fmt}\n",
+                    f"  - Distance: {distance_km:.2f} km\n",
+                    f"  - Avg HR: {activity.avg_hr:.0f} bpm",
+                ]
+
+                if activity.min_hr and activity.max_hr:
+                    activity_info.append(f" (Min: {activity.min_hr:.0f}, Max: {activity.max_hr:.0f})")
+
+                activity_info.append(f"\n  - Calories: {activity.calories:,.0f}")
+
+                # Add split data if available
+                if activity.split_summaries:
+                    activity_info.append("\n  - Splits:")
+                    for i, split in enumerate(activity.split_summaries.get("splits", [])):
+                        split_distance = split.get("distance", 0) / 1000  # Convert to km
+                        split_time = split.get("movingDuration", 0)
+                        pace = split_time / 60 / split_distance if split_distance > 0 else 0
+                        pace_min = int(pace)
+                        pace_sec = int((pace - pace_min) * 60)
+
+                        activity_info.append(
+                            f"\n    - Split {i+1}: {split_distance:.2f} km @ {pace_min}:{pace_sec:02d} min/km"
+                        )
+
+                md.append("".join(activity_info))
+
         else:
             md.append("#### Recorded Activities\n- No activities recorded for this day")
 
         md.append("")  # Add a blank line between days
-
-    # Add insights section - this could be generated based on data analysis in the future
-    md += [
-        "## Insights & Recommendations",
-        "- Sleep duration variability under 5%: great consistency – maintain this pattern.",
-        "- HRV trended upward; consider adding one extra high‑intensity session next week.",
-        "- Two days dipped Body Battery < 25 – schedule active recovery on those mornings.",
-    ]
 
     return "\n".join(md)

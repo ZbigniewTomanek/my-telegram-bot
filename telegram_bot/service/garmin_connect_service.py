@@ -9,10 +9,6 @@ from loguru import logger
 
 from telegram_bot.service.garmin_account_manager import GarminAccountManager
 
-# Configuration
-RETRIES = 3
-BACKOFF = 5  # seconds (multiplier for retry)
-
 # Data classes imported from original script
 from telegram_bot.service.garmin_data_models import (
     DailyActivity,
@@ -24,6 +20,10 @@ from telegram_bot.service.garmin_data_models import (
     format_markdown,
     get_daily_metrics,
 )
+
+# Configuration
+RETRIES = 3
+BACKOFF = 5  # seconds (multiplier for retry)
 
 
 class GarminConnectService:
@@ -224,8 +224,9 @@ class GarminConnectService:
         days: int = 7,
     ) -> List[Dict[str, Any]]:
         """
-        Export raw JSON data from Garmin Connect API.
-        Includes detailed activity data and all-day heart rate information.
+        Export comprehensive raw JSON data from Garmin Connect API.
+        Includes detailed activity data, health metrics, performance metrics,
+        device information, and more.
 
         Args:
             telegram_user_id: The Telegram user ID.
@@ -245,34 +246,97 @@ class GarminConnectService:
         date_range = daterange(start_date, end_date, days)
         raw_data = []
 
-        for date in date_range:
-            for attempt in range(RETRIES):
-                try:
-                    daily_metrics = get_daily_metrics(client, date)
-                    raw_data.append(daily_metrics)
-                    logger.debug(f"Retrieved raw data for {date}")
-                    break
-                except GarminConnectTooManyRequestsError:
-                    sleep_seconds = BACKOFF * (attempt + 1)
-                    logger.warning(f"Rate limit hit – retrying {date} in {sleep_seconds}s…")
-                    await asyncio.sleep(sleep_seconds)
-                except Exception as exc:
-                    if attempt < RETRIES - 1:
-                        sleep_seconds = BACKOFF * (attempt + 1)
-                        logger.warning(f"Error fetching data for {date}: {str(exc)}. Retrying in {sleep_seconds}s...")
-                        await asyncio.sleep(sleep_seconds)
-                    else:
-                        logger.error(f"Failed to fetch data for {date} after {RETRIES} attempts: {str(exc)}")
-                        # Add error info to raw_data instead of skipping completely
-                        raw_data.append(
-                            {"date": date, "error": f"Failed to fetch data after {RETRIES} attempts: {str(exc)}"}
-                        )
-                        break
-            else:
-                logger.warning(f"Skipping {date} after {RETRIES} attempts due to rate limiting")
-                raw_data.append({"date": date, "error": f"Rate limit exceeded after {RETRIES} attempts"})
+        # Get device information (once, not per day)
+        devices_data = await self._fetch_with_retry(client.get_devices)
+        device_solar_data = {}
 
-        logger.info(f"Exported raw JSON data for {len(raw_data)} days")
+        # If devices are available, try to get solar data for each
+        if devices_data and isinstance(devices_data, list):
+            for device in devices_data:
+                if device.get("deviceId"):
+                    device_id = device.get("deviceId")
+                    try:
+                        # Use the first date in the range as a reference date
+                        reference_date = date_range[0]
+                        if isinstance(reference_date, dt.date):
+                            reference_date_str = reference_date.isoformat()
+                        else:
+                            reference_date_str = reference_date  # Already a string
+
+                        solar_data = await self._fetch_with_retry(
+                            client.get_device_solar_data, device_id, reference_date_str
+                        )
+                        if solar_data:
+                            device_solar_data[device_id] = solar_data
+                    except Exception as exc:
+                        logger.warning(f"Error fetching solar data for device {device_id}: {str(exc)}")
+
+        # Get user's personal records (once, not per day)
+        personal_records = await self._fetch_with_retry(client.get_personal_record)
+
+        for date in date_range:
+            daily_data = {}
+
+            # Fetch daily metrics (existing function)
+            try:
+                # Get base daily metrics (steps, sleep, HRV, etc.)
+                daily_metrics = await self._fetch_with_retry(get_daily_metrics, client, date)
+                daily_data.update(daily_metrics)
+
+                # Add additional data sources
+                # 1. Intensity minutes data
+                intensity_minutes = await self._fetch_with_retry(client.get_intensity_minutes_data, date)
+                daily_data["intensity_minutes_detailed"] = intensity_minutes
+
+                # 2. Floors data
+                floors_data = await self._fetch_with_retry(client.get_floors, date)
+                daily_data["floors"] = floors_data
+
+                # 3. Hydration data
+                hydration_data = await self._fetch_with_retry(client.get_hydration_data, date)
+                daily_data["hydration"] = hydration_data
+
+                # 4. Fitness age data (requires a date parameter for consistency)
+                fitness_age_data = await self._fetch_with_retry(client.get_fitnessage_data, date)
+                daily_data["fitness_age"] = fitness_age_data
+
+                # 5. More comprehensive activities data
+                activities_data = await self._fetch_with_retry(client.get_activities_by_date, date, date)
+
+                if activities_data and isinstance(activities_data, list):
+                    activity_details = []
+
+                    for activity in activities_data:
+                        activity_id = activity.get("activityId")
+                        if activity_id:
+                            # Get activity splits if available
+                            try:
+                                splits = await self._fetch_with_retry(client.get_activity_split_summaries, activity_id)
+                                activity["split_summaries"] = splits
+                            except Exception as exc:
+                                logger.warning(f"Error fetching splits for activity {activity_id}: {str(exc)}")
+
+                        activity_details.append(activity)
+
+                    daily_data["activities_detailed"] = activity_details
+
+                # Add device info to each day's data
+                daily_data["user_devices"] = devices_data
+                daily_data["device_solar_data"] = device_solar_data
+                daily_data["personal_records"] = personal_records
+
+                # Add the day's data to our results
+                raw_data.append(daily_data)
+                logger.debug(f"Retrieved comprehensive raw data for {date}")
+
+            except GarminConnectTooManyRequestsError:
+                # Handle rate limiting - already managed in _fetch_with_retry
+                raw_data.append({"date": date, "error": f"Rate limit exceeded after {RETRIES} attempts"})
+            except Exception as exc:
+                logger.error(f"Failed to fetch data for {date} after {RETRIES} attempts: {str(exc)}")
+                raw_data.append({"date": date, "error": f"Failed to fetch data: {str(exc)}"})
+
+        logger.info(f"Exported comprehensive raw JSON data for {len(raw_data)} days")
         return raw_data
 
     async def export_aggregated_json(
@@ -310,6 +374,37 @@ class GarminConnectService:
 
         logger.info(f"Exported aggregated JSON data for {len(data)} days")
         return aggregated_data
+
+    async def _fetch_with_retry(self, func, *args, **kwargs):
+        """
+        Helper method to fetch data with retry logic and rate limiting handling.
+
+        Args:
+            func: The function to call
+            *args: Arguments to pass to the function
+            **kwargs: Keyword arguments to pass to the function
+
+        Returns:
+            Data returned by the function or error dictionary
+        """
+        for attempt in range(RETRIES):
+            try:
+                result = func(*args, **kwargs)
+                return result
+            except GarminConnectTooManyRequestsError:
+                sleep_seconds = BACKOFF * (attempt + 1)
+                logger.warning(f"Rate limit hit while fetching {func.__name__} – retrying in {sleep_seconds}s…")
+                await asyncio.sleep(sleep_seconds)
+                if attempt == RETRIES - 1:
+                    raise
+            except Exception as exc:
+                if attempt < RETRIES - 1:
+                    sleep_seconds = BACKOFF * (attempt + 1)
+                    logger.warning(f"Error in {func.__name__}: {str(exc)}. Retrying in {sleep_seconds}s...")
+                    await asyncio.sleep(sleep_seconds)
+                else:
+                    logger.error(f"Failed to execute {func.__name__} after {RETRIES} attempts: {str(exc)}")
+                    raise
 
     def _calculate_summary(self, data: List[GarminDailyData]) -> Dict[str, Any]:
         """
