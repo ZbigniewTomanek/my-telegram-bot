@@ -2,6 +2,10 @@
 
 A Telegram bot that helps you track your health data, including food and medication logs, as well as Garmin Connect health metrics.
 
+## Documentation
+
+- [Garmin Data Reference](docs/garmin_data_reference.md) - Comprehensive documentation of all data exported from Garmin Connect
+
 ## Features
 
 ### Core Features
