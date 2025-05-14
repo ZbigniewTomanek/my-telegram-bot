@@ -5,6 +5,7 @@ from telegram_bot.service.ai_assitant_service import AIAssistantService
 from telegram_bot.service.background_task_executor import BackgroundTaskExecutor
 from telegram_bot.service.db_service import DBService
 from telegram_bot.service.garmin_connect_service import GarminConnectService
+from telegram_bot.service.garmin_data_analysis_service import GarminDataAnalysisService
 from telegram_bot.service.message_transcription_service import MessageTranscriptionService
 
 
@@ -38,3 +39,7 @@ class ServiceFactory:
     @cached_property
     def ai_assistant_service(self) -> AIAssistantService:
         return AIAssistantService(db_service=self.db_service, bot_settings=self.bot_settings)
+
+    @cached_property
+    def garmin_data_analysis_service(self) -> GarminDataAnalysisService:
+        return GarminDataAnalysisService(garmin_service=self.garmin_connect_service, out_dir=self.bot_settings.out_dir)

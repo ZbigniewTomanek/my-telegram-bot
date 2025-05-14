@@ -25,3 +25,4 @@ tests/data/garmin_data/garmin_hrv_2025-05-01.json filter=lfs diff=lfs merge=lfs 
 tests/data/garmin_data/garmin_hydration_2025-05-01.json filter=lfs diff=lfs merge=lfs -text
 tests/data/garmin_data/garmin_steps_2025-05-01.json filter=lfs diff=lfs merge=lfs -text
 tests/data/garmin_data/garmin_stress_2025-05-01.json filter=lfs diff=lfs merge=lfs -text
+tests/data/garmin_data/sample_raw_garmin_data.json filter=lfs diff=lfs merge=lfs -text
